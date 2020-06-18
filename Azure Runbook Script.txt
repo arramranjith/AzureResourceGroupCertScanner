@@ -1,0 +1,72 @@
+Param(
+
+[Parameter(Mandatory = $false)]
+# Certificates will be shown as 'warning' if they are going to expire in $minimumCertAgeDays days.
+[string] $minimumCertAgeDays = 45
+
+
+)
+
+$connectionName = "AzureRunAsConnection"
+try {
+    # Get the connection "AzureRunAsConnection"
+    $servicePrincipalConnection = Get-AutomationConnection -Name $connectionName         
+
+    Add-AzureRmAccount `
+        -ServicePrincipal `
+        -TenantId $servicePrincipalConnection.TenantId `
+        -ApplicationId $servicePrincipalConnection.ApplicationId `
+        -CertificateThumbprint $servicePrincipalConnection.CertificateThumbprint 
+} catch {
+    if (!$servicePrincipalConnection) {
+        $ErrorMessage = "Connection $connectionName not found."
+        throw $ErrorMessage
+    } else {
+        Write-Error -Message $_.Exception
+        throw $_.Exception
+    }
+}
+
+$currentSubscription = (Get-AzureRmContext).Subscription
+$resourceGroups = Get-AzureRmResourceGroup
+
+if ($resourceGroups) 
+{
+    foreach ($ResourceGroup in $resourceGroups)
+     {
+        $ResourceGroupName = "$($ResourceGroup.ResourceGroupName)"
+        $allCertificates = Get-AzureRmWebAppCertificate -ResourceGroupName $ResourceGroupName
+
+           foreach ($certificate in $allCertificates)
+            {
+                [datetime]$expiration = $($certificate.ExpirationDate)
+                [int]$certExpiresIn = ($expiration - $(get-date)).Days
+
+                if ($certExpiresIn -gt $minimumCertAgeDays)
+                {                    
+                    Write-Output "$($certificate.FriendlyName) with expiry date is $($certificate.ExpirationDate) and expires in $certExpiresIn days [on $expiration] in resourcegroup: $($ResourceGroup.ResourceGroupName)"  
+
+                }
+                else
+                {
+                    Write-Output "***********************************************************************"
+                    Write-Error "WARNING: Certificate with friendly name: $($certificate.FriendlyName) expires in $certExpiresIn days [on $expiration] `
+                    This certificate can be found in resourcegroup: $($ResourceGroup.ResourceGroupName) "
+                    $subject =  "WARNING -: Certificate with friendly name: $($certificate.FriendlyName) expires in $certExpiresIn days"
+                    $body    = "<hr><font color=#FF0000><b>WARNING:</b><br>Certificate with friendly name: $($certificate.FriendlyName)<br> `
+                    Expires in: $certExpiresIn days on $expiration</font><br> `
+                    <hr>This certificate can be found in resourcegroup: $($ResourceGroup.ResourceGroupName)<br> `
+                    Existing in subscription:<br>
+                    <li> Name: $($currentSubscription.Name)<br></li>
+                    <li> Subscription Id: $($currentSubscription.Id)<br></li>
+                    <li> Tenant Id: $($currentSubscription.TenantId)<br></li><hr>"           
+                    Write-Output "***********************************************************************"
+
+                }
+            }
+     }
+}
+else
+{
+    Write-Output "There are no resourcegroups within this subscription"
+}
